@@ -4,11 +4,8 @@ const { body, validationResult } = require('express-validator');
 const socketIO = require('socket.io');
 const qrcode = require('qrcode');
 const http = require('http');
-const fs = require('fs');
-const { phoneNumberFormatter } = require('./helpers/formatter');
 const fileUpload = require('express-fileupload');
 const axios = require('axios');
-const mime = require('mime-types');
 
 const port = process.env.PORT || 8000;
 
@@ -21,13 +18,6 @@ app.use(express.urlencoded({
   extended: true
 }));
 
-/**
- * BASED ON MANY QUESTIONS
- * Actually ready mentioned on the tutorials
- * 
- * Many people confused about the warning for file-upload
- * So, we just disabling the debug for simplicity.
- */
 app.use(fileUpload({
   debug: false
 }));
@@ -49,73 +39,11 @@ const client = new Client({
       '--disable-accelerated-2d-canvas',
       '--no-first-run',
       '--no-zygote',
-      '--single-process', // <- this one doesn't works in Windows
+      '--single-process',
       '--disable-gpu'
     ],
   },
   authStrategy: new LocalAuth()
-});
-
-client.on('message', msg => {
-  if (msg.body == '!ping') {
-    msg.reply('pong');
-  } else if (msg.body == 'good morning') {
-    msg.reply('selamat pagi');
-  } else if (msg.body == '!groups') {
-    client.getChats().then(chats => {
-      const groups = chats.filter(chat => chat.isGroup);
-
-      if (groups.length == 0) {
-        msg.reply('You have no group yet.');
-      } else {
-        let replyMsg = '*YOUR GROUPS*\n\n';
-        groups.forEach((group, i) => {
-          replyMsg += `ID: ${group.id._serialized}\nName: ${group.name}\n\n`;
-        });
-        replyMsg += '_You can use the group id to send a message to the group._'
-        msg.reply(replyMsg);
-      }
-    });
-  }
-
-  // NOTE!
-  // UNCOMMENT THE SCRIPT BELOW IF YOU WANT TO SAVE THE MESSAGE MEDIA FILES
-  // Downloading media
-  // if (msg.hasMedia) {
-  //   msg.downloadMedia().then(media => {
-  //     // To better understanding
-  //     // Please look at the console what data we get
-  //     console.log(media);
-
-  //     if (media) {
-  //       // The folder to store: change as you want!
-  //       // Create if not exists
-  //       const mediaPath = './downloaded-media/';
-
-  //       if (!fs.existsSync(mediaPath)) {
-  //         fs.mkdirSync(mediaPath);
-  //       }
-
-  //       // Get the file extension by mime-type
-  //       const extension = mime.extension(media.mimetype);
-        
-  //       // Filename: change as you want! 
-  //       // I will use the time for this example
-  //       // Why not use media.filename? Because the value is not certain exists
-  //       const filename = new Date().getTime();
-
-  //       const fullFilename = mediaPath + filename + '.' + extension;
-
-  //       // Save to file
-  //       try {
-  //         fs.writeFileSync(fullFilename, media.data, { encoding: 'base64' }); 
-  //         console.log('File downloaded successfully!', fullFilename);
-  //       } catch (err) {
-  //         console.log('Failed to save the file:', err);
-  //       }
-  //     }
-  //   });
-  // }
 });
 
 client.initialize();
@@ -154,10 +82,28 @@ io.on('connection', function(socket) {
   });
 });
 
+const phoneNumberFormatter = async function(number) {
+  
+  let to = number;
+  let contactId;
 
-const checkRegisteredNumber = async function(number) {
-  const isRegistered = await client.isRegisteredUser(number);
-  return isRegistered;
+  if (to.startsWith('55') && to.length == 13 && to[4] == 9) {
+    contactId = await client.getNumberId(to.slice(0, 4) + to.slice(5))
+  }
+  
+  if (!contactId) {
+    contactId = await client.getNumberId(to)
+  }
+  
+  if (contactId) {
+    to = contactId.user
+  }
+
+  if (!to.endsWith('@c.us')) {
+    to += '@c.us';
+  }
+
+  return to;
 }
 
 // Send message
@@ -178,17 +124,8 @@ app.post('/send-message', [
     });
   }
 
-  const number = phoneNumberFormatter(req.body.number);
+  const number = await phoneNumberFormatter(req.body.number);
   const message = req.body.message;
-
-  const isRegisteredNumber = await checkRegisteredNumber(number);
-
-  if (!isRegisteredNumber) {
-    return res.status(422).json({
-      status: false,
-      message: 'The number is not registered'
-    });
-  }
 
   client.sendMessage(number, message).then(response => {
     res.status(200).json({
@@ -205,7 +142,7 @@ app.post('/send-message', [
 
 // Send media
 app.post('/send-media', async (req, res) => {
-  const number = phoneNumberFormatter(req.body.number);
+  const number = await phoneNumberFormatter(req.body.number);
   const fileUrl = req.body.file;  
   const mimetype = req.body.mimetype;  
   const caption = req.body.caption;
@@ -230,111 +167,6 @@ app.post('/send-media', async (req, res) => {
       response: err
     });
   });
-});
-
-const findGroupByName = async function(name) {
-  const group = await client.getChats().then(chats => {
-    return chats.find(chat => 
-      chat.isGroup && chat.name.toLowerCase() == name.toLowerCase()
-    );
-  });
-  return group;
-}
-
-// Send message to group
-// You can use chatID or group name, yea!
-app.post('/send-group-message', [
-  body('id').custom((value, { req }) => {
-    if (!value && !req.body.name) {
-      throw new Error('Invalid value, you can use `id` or `name`');
-    }
-    return true;
-  }),
-  body('message').notEmpty(),
-], async (req, res) => {
-  const errors = validationResult(req).formatWith(({
-    msg
-  }) => {
-    return msg;
-  });
-
-  if (!errors.isEmpty()) {
-    return res.status(422).json({
-      status: false,
-      message: errors.mapped()
-    });
-  }
-
-  let chatId = req.body.id;
-  const groupName = req.body.name;
-  const message = req.body.message;
-
-  // Find the group by name
-  if (!chatId) {
-    const group = await findGroupByName(groupName);
-    if (!group) {
-      return res.status(422).json({
-        status: false,
-        message: 'No group found with name: ' + groupName
-      });
-    }
-    chatId = group.id._serialized;
-  }
-
-  client.sendMessage(chatId, message).then(response => {
-    res.status(200).json({
-      status: true,
-      response: response
-    });
-  }).catch(err => {
-    res.status(500).json({
-      status: false,
-      response: err
-    });
-  });
-});
-
-// Clearing message on spesific chat
-app.post('/clear-message', [
-  body('number').notEmpty(),
-], async (req, res) => {
-  const errors = validationResult(req).formatWith(({
-    msg
-  }) => {
-    return msg;
-  });
-
-  if (!errors.isEmpty()) {
-    return res.status(422).json({
-      status: false,
-      message: errors.mapped()
-    });
-  }
-
-  const number = phoneNumberFormatter(req.body.number);
-
-  const isRegisteredNumber = await checkRegisteredNumber(number);
-
-  if (!isRegisteredNumber) {
-    return res.status(422).json({
-      status: false,
-      message: 'The number is not registered'
-    });
-  }
-
-  const chat = await client.getChatById(number);
-  
-  chat.clearMessages().then(status => {
-    res.status(200).json({
-      status: true,
-      response: status
-    });
-  }).catch(err => {
-    res.status(500).json({
-      status: false,
-      response: err
-    });
-  })
 });
 
 server.listen(port, function() {
