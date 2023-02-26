@@ -87,23 +87,15 @@ const phoneNumberFormatter = async function(number) {
   let to = number;
   let contactId;
 
-  if (to.startsWith('55') && to.length == 13 && to[4] == 9) {
-    contactId = await client.getNumberId(to.slice(0, 4) + to.slice(5))
-  }
-  
-  if (!contactId) {
-    contactId = await client.getNumberId(to)
-  }
-  
-  if (contactId) {
-    to = contactId.user
-  }
+  try {
+    
+    var _phoneId = await client.getNumberId(to)
+    var _isValid = await client.isRegisteredUser(_phoneId._serialized)
+    return _phoneId._serialized
 
-  if (!to.endsWith('@c.us')) {
-    to += '@c.us';
+  } catch (error) {    
+    return to
   }
-
-  return to;
 }
 
 // Send message
