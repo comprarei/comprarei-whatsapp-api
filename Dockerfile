@@ -1,12 +1,34 @@
+# Set the base image to Node 18
 FROM node:18
-RUN apt-get update
-RUN apt-get install -yyq ca-certificates
-RUN apt-get install -yyq libappindicator1 libasound2 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgcc1 libgconf-2-4 libgdk-pixbuf2.0-0 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6
-RUN apt-get install -yyq gconf-service lsb-release wget xdg-utils
-RUN apt-get install -yyq fonts-liberation
-WORKDIR /usr/src/app
-COPY package*.json ./
-RUN npm install
+
+# File Author / Maintainer
+LABEL maintainer=thiago.roieski@comprarei.com.br"
+
+# Update the repository sources list
+RUN apt-get update && apt-get upgrade -y
+
+# Install Chromium
+RUN apt-get install -y chromium
+
+# Set the working directory to /app
+WORKDIR /
+
+# Bundle your app source inside the docker image
 COPY . .
-EXPOSE 5000
-CMD [ "node", "app.js" ]
+
+# Install all the dependencies
+RUN npm ci
+
+# Build the API
+RUN npm install 
+
+# Your app binds to port 8080 so you'll use the EXPOSE instruction to have it mapped by the docker daemon
+EXPOSE 8080
+
+# Set environment variable to disable Chromium's sandbox (this is required if you are running as root)
+ENV CHROME_BIN=/usr/bin/chromium-browser
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_ARGS='--no-sandbox'
+
+# Start command
+CMD [ "node", "app.js" ] # again replace this with your specific node command to start your app/service
